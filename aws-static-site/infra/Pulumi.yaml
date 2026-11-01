@@ -1,0 +1,6 @@
+name: my-site
+description: Static site on S3 and CloudFront, with deploy access for GitHub Actions
+runtime:
+  name: python
+  options:
+    toolchain: uv

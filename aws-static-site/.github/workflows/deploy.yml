@@ -1,0 +1,53 @@
+name: Deploy
+
+# Every infrastructure change and site upload runs here, so each one has a log.
+# The tip of main is production: merge dev into main and push to release.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # lets the job sign in to AWS through OIDC
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Update the infrastructure
+        id: pulumi
+        uses: pulumi/actions@v7
+        with:
+          command: up
+          stack-name: prod
+          work-dir: infra
+          cloud-url: s3://${{ vars.PULUMI_STATE_BUCKET }}
+          upsert: true
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+
+      # HTML gets a short cache so new pages show fast; everything else a day.
+      - name: Upload the site
+        env:
+          BUCKET: ${{ steps.pulumi.outputs.bucket_name }}
+        run: |
+          aws s3 sync site/ "s3://$BUCKET" --delete --exclude "*.html" \
+            --cache-control "public, max-age=86400"
+          aws s3 sync site/ "s3://$BUCKET" --delete --exclude "*" --include "*.html" \
+            --cache-control "public, max-age=300"
+
+      - name: Clear the CloudFront cache
+        env:
+          DISTRIBUTION: ${{ steps.pulumi.outputs.distribution_id }}
+        run: aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths "/*"

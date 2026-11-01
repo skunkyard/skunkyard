@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  One-time setup for a static site, deployed by hand with admin credentials:
+  the hosted zone, the Pulumi state bucket, and the role GitHub Actions uses
+  for every deploy after this.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: Your domain, such as example.com.
+  GitHubRepo:
+    Type: String
+    Description: >-
+      The repository part of GitHub's OIDC subject. Run
+      gh api repos/OWNER/REPO/actions/oidc/customization/sub. If
+      use_immutable_subject is true, use sub_claim_prefix without "repo:",
+      such as me@1234/my-site@5678. Otherwise use OWNER/REPO.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of the account's GitHub OIDC provider, if another project already
+      created it. An account can have only one. Leave empty to create it.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+
+Resources:
+  Zone:
+    Type: AWS::Route53::HostedZone
+    DeletionPolicy: Retain
+    Properties:
+      Name: !Ref DomainName
+
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub my-site-pulumi-state-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  GitHubOidc:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: my-site-github-deploy
+      Description: GitHub Actions runs Pulumi and uploads the site, from pushes to main only.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidc, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:ref:refs/heads/main
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SiteAndStateBuckets
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - arn:aws:s3:::my-site-*
+                  - arn:aws:s3:::my-site-*/*
+              - Sid: ThisZoneOnly
+                Effect: Allow
+                Action:
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                  - route53:ChangeResourceRecordSets
+                  - route53:ListTagsForResource
+                Resource: !Sub arn:aws:route53:::hostedzone/${Zone}
+              - Sid: ZoneLookups
+                Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                  - route53:ListHostedZonesByName
+                  - route53:GetChange
+                Resource: "*"
+              # These services don't scope well by resource. The role can reach other
+              # projects' certificates and distributions in this account.
+              - Sid: CertificatesAndCdn
+                Effect: Allow
+                Action:
+                  - acm:*
+                  - cloudfront:*
+                Resource: "*"
+
+Outputs:
+  NameServers:
+    Description: Set these at your registrar as the domain's name servers.
+    Value: !Join [", ", !GetAtt Zone.NameServers]
+  StateBucket:
+    Description: GitHub variable PULUMI_STATE_BUCKET.
+    Value: !Ref StateBucket
+  DeployRoleArn:
+    Description: GitHub variable AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt DeployRole.Arn
