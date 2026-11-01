@@ -1,0 +1,19 @@
+name: CI
+
+# Checks every push to dev, and every pull request into main, before anything ships.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check links
+        run: python3 check_links.py site
