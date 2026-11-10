@@ -1,4 +1,4 @@
-# Skunkyard
+# Skunk Yard
 
 Open-source pieces from [skunkyard.com](https://skunkyard.com), an open workshop
 of experiments and findings.
