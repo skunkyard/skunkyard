@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Static site on S3 and CloudFront with Route 53 DNS, Purelymail mail records, and a GitHub Actions deploy role. Deploy in us-east-1 (CloudFront requires its certificate there). Run through infra/provision.py.
+
+Parameters:
+  DomainName:
+    Type: String
+  GitHubRepo:
+    Type: String
+    Description: The repo part of GitHub's OIDC subject, owner/name or, on immutable subjects, owner@id/name@id. provision.py looks it up.
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Set to true only if the AWS account doesn't have the GitHub OIDC provider yet.
+  PurelymailOwnership:
+    Type: String
+    Description: The Purelymail account's ownership value (provision.py fetches it). Empty skips the mail records.
+    Default: ""
+
+Conditions:
+  MakeOidc: !Equals [!Ref CreateOidcProvider, "true"]
+  HasMail: !Not [!Equals [!Ref PurelymailOwnership, ""]]
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+
+  # Stack creation waits here until Porkbun's name servers point to HostedZone.
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames: [!Sub "www.${DomainName}"]
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - { DomainName: !Ref DomainName, HostedZoneId: !Ref HostedZone }
+        - { DomainName: !Sub "www.${DomainName}", HostedZoneId: !Ref HostedZone }
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Sends www to the apex domain so search engines see one canonical site.
+  WwwRedirect:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-www-redirect"
+      AutoPublish: true
+      FunctionConfig: { Comment: Redirect www to apex, Runtime: cloudfront-js-2.0 }
+      FunctionCode: !Sub |
+        function handler(event) {
+          var req = event.request;
+          if (req.headers.host && req.headers.host.value.startsWith('www.')) {
+            return { statusCode: 301, statusDescription: 'Moved Permanently',
+                     headers: { location: { value: 'https://${DomainName}' + req.uri } } };
+          }
+          return req;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases: [!Ref DomainName, !Sub "www.${DomainName}"]
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: s3
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig: { OriginAccessIdentity: "" }
+        DefaultCacheBehavior:
+          TargetOriginId: s3
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt WwwRedirect.FunctionMetadata.FunctionARN
+        # S3 returns 403 for missing keys when the bucket is private.
+        CustomErrorResponses:
+          - { ErrorCode: 403, ResponseCode: 404, ResponsePagePath: /index.html }
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${Bucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  GitHubOidc:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/main"
+      Policies:
+        - PolicyName: deploy-site
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !GetAtt Bucket.Arn
+              - Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject, s3:GetObject]
+                Resource: !Sub "${Bucket.Arn}/*"
+              - Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  # Site records. Z2FDTNDATAQYW2 is the fixed hosted zone ID for every CloudFront alias.
+  SiteRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      RecordSets:
+        - { Name: !Ref DomainName, Type: A, AliasTarget: { DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2 } }
+        - { Name: !Ref DomainName, Type: AAAA, AliasTarget: { DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2 } }
+        - { Name: !Sub "www.${DomainName}", Type: A, AliasTarget: { DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2 } }
+        - { Name: !Sub "www.${DomainName}", Type: AAAA, AliasTarget: { DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2 } }
+        - { Name: !Ref DomainName, Type: CAA, TTL: "3600", ResourceRecords: ['0 issue "amazon.com"'] }
+
+  # Mail at Purelymail (https://purelymail.com/docs/domainDocs).
+  MailRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: HasMail
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      RecordSets:
+        - { Name: !Ref DomainName, Type: MX, TTL: "3600", ResourceRecords: ["50 mailserver.purelymail.com"] }
+        - Name: !Ref DomainName
+          Type: TXT
+          TTL: "3600"
+          ResourceRecords: ['"v=spf1 include:_spf.purelymail.com ~all"', !Sub '"${PurelymailOwnership}"']
+        - { Name: !Sub "_dmarc.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [dmarcroot.purelymail.com] }
+        - { Name: !Sub "purelymail1._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key1.dkimroot.purelymail.com] }
+        - { Name: !Sub "purelymail2._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key2.dkimroot.purelymail.com] }
+        - { Name: !Sub "purelymail3._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key3.dkimroot.purelymail.com] }
+        - { Name: !Sub "autoconfig.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [autoconfig.purelymail.com] }
+        - { Name: !Sub "_autodiscover._tcp.${DomainName}", Type: SRV, TTL: "3600", ResourceRecords: ["0 0 443 autodiscover.purelymail.com"] }
+
+Outputs:
+  NameServers:
+    Description: Set these as the name servers for the domain at Porkbun.
+    Value: !Join [", ", !GetAtt HostedZone.NameServers]
+  BucketName: { Value: !Ref Bucket }
+  DistributionId: { Value: !Ref Distribution }
+  DeployRoleArn: { Value: !GetAtt DeployRole.Arn }
