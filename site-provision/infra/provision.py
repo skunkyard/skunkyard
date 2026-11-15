@@ -189,7 +189,7 @@ def provision_mail(domain, mailboxes):
         purelymail("createUser", token, userName=box, domainName=domain, password=password,
                    enablePasswordReset=False, sendWelcomeEmail=False)
         keychain_save(f"purelymail-{address}", password)
-        log(f'Created {address}; its password is in the Keychain item "purelymail-{address}"')
+        log(f'Created {address}; its first password is in the Keychain item "purelymail-{address}". Change it at first sign-in.')
         log(f"Read its mail at https://inbox.purelymail.com; manage it from your Purelymail admin account at https://purelymail.com")
 
 

@@ -15,7 +15,7 @@ Pulumi-based setup that deploys skunkyard.com, see
 | AWS | creates or updates the CloudFormation stack in `infra/site.yaml`: Route 53 zone, certificate, private S3 bucket, CloudFront with a www-to-apex redirect, mail DNS records, and a deploy role |
 | Porkbun | points the domain's name servers at the Route 53 zone |
 | GitHub | sets the repository variables the deploy workflow reads, then runs the deploy |
-| Purelymail | adds the domain, turns off account reset for it, and creates each mailbox with a generated password saved in the macOS Keychain |
+| Purelymail | adds the domain, turns off account reset for it, and creates each mailbox with a generated first password saved in the macOS Keychain; see [Mail](#mail) |
 
 GitHub Actions holds no AWS keys. It signs in through GitHub's OIDC provider and
 assumes a role that AWS trusts only for `main` of your repository. The role can
@@ -81,16 +81,24 @@ it.
 6. Write the project's own command into the project's README. Keep `infra/`
    free of project details, so it stays reusable.
 
-## Signing in to mail
+## Mail
 
-- **Webmail:** https://inbox.purelymail.com. Sign in with the full email address and the mailbox password from the Keychain: `security find-generic-password -s purelymail-<address> -w`.
-- **Admin:** sign in to your Purelymail account at https://purelymail.com. The domain and its mailboxes are there; reset a password or add users and routing rules from it.
+Each mailbox lives on Purelymail.
 
-## Mail on an iPhone
+- **Webmail:** https://inbox.purelymail.com. Sign in with the full email address and the mailbox password.
+- **Admin:** https://purelymail.com, with your Purelymail admin account. Reset mailbox passwords, add mailboxes, and set routing rules there.
 
-Add the account under **Settings > Apps > Mail > Mail Accounts > Add Account >
-Other > Add Mail Account**, and choose IMAP. The mailbox password is in the
-Keychain: `security find-generic-password -s purelymail-<address> -w`.
+### First sign-in
+
+The provisioning script gives each new mailbox a generated password and saves it in the Keychain item `purelymail-<address>`. To read it, run `security find-generic-password -s purelymail-hello@example.com -w`.
+
+1. Sign in to webmail with that password.
+2. Change the password under **Settings**, and save the new one in your password manager.
+3. Delete the Keychain copy, which no longer works: `security delete-generic-password -s purelymail-hello@example.com`.
+
+### Phone and desktop mail apps
+
+On an iPhone, add the account under **Settings > Apps > Mail > Mail Accounts > Add Account > Other > Add Mail Account**, and choose IMAP. Other mail apps use the same settings.
 
 | | Incoming | Outgoing |
 |---|---|---|
@@ -99,6 +107,4 @@ Keychain: `security find-generic-password -s purelymail-<address> -w`.
 | Password | the mailbox password | the same password |
 | Port and SSL | 993, SSL on | 465, SSL on (587 if 465 fails) |
 
-The outgoing user name and password are required. Without them, the phone
-receives mail but can't send it, and Purelymail rejects each message with "The
-sender address was invalid".
+The outgoing user name and password are required. Without them, the app receives mail but can't send it, and Purelymail rejects each message with "The sender address was invalid".
