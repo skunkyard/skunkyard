@@ -8,7 +8,7 @@ of experiments and findings.
 | [`aws-static-site/`](aws-static-site/) | Host a static site on your own domain with AWS and GitHub Actions, for about $0.50 a month. Written for an LLM to follow. |
 | [`claude-code-workflow/`](claude-code-workflow/) | Work with Claude Code on `dev`, keep the code on GitHub, and ship by pushing to `main`. Written for an LLM to follow. |
 | [`prompts/`](prompts/) | The prompts behind skunkyard.com's experiments, as given to Claude in Claude Code, with what each one made. |
-| [`site-provision/`](site-provision/) | One command sets up a static site with mail: AWS hosting, registrar name servers, GitHub deploy, and mailboxes, all through APIs. Safe to rerun. |
+| [`site-provision/`](site-provision/) | **Site Launch Kit.** One command sets up a static site with mail: AWS hosting, registrar name servers, GitHub deploy, and mailboxes, all through APIs. Safe to rerun. |
 | [`search/`](search/) | The smallest working site search: three pages and a search page, indexed by Pagefind. No server. |
 
 ## License

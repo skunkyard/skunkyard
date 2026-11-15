@@ -25,5 +25,13 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
+      # Applies changes to infra/site.yaml. The parameters come from site-launch.json, written by provision.py.
+      - name: Update infrastructure
+        if: hashFiles('site-launch.json') != '' && vars.CFN_ROLE_ARN != ''
+        run: |
+          mapfile -t params < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' site-launch.json)
+          aws cloudformation deploy --stack-name "${{ vars.CFN_STACK }}" --template-file infra/site.yaml \
+            --role-arn "${{ vars.CFN_ROLE_ARN }}" --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
+            --parameter-overrides "${params[@]}"
       - run: aws s3 sync site/ "s3://${{ vars.S3_BUCKET }}" --delete
       - run: aws cloudfront create-invalidation --distribution-id "${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}" --paths "/*"

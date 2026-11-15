@@ -1,4 +1,4 @@
-# Site provision
+# Site Launch Kit
 
 One command takes a domain from "just registered" to a live static site with
 working mail: AWS hosting, registrar name servers, GitHub deploy variables, and
@@ -6,20 +6,24 @@ mailboxes. It drives each service through its API, so there is no clicking
 through dashboards. It checks the current state before each step and skips what
 is already done, so you can rerun it after a failure or a template change.
 
+You run it once per site with admin AWS credentials. After that, GitHub Actions deploys both the site's files and changes to `infra/site.yaml` on every push to `main`, using the parameters the script writes to `site-launch.json`. You only run the script again for registrar or mail changes.
+
 It uses CloudFormation only, with no Pulumi and no state bucket. For the
 Pulumi-based setup that deploys skunkyard.com, see
 [`aws-static-site/`](../aws-static-site/).
 
 | service | what the script does |
 |---|---|
-| AWS | creates or updates the CloudFormation stack in `infra/site.yaml`: Route 53 zone, certificate, private S3 bucket, CloudFront with a www-to-apex redirect, mail DNS records, and a deploy role |
+| AWS | creates or updates the CloudFormation stack in `infra/site.yaml`: Route 53 zone, certificate, private S3 bucket, CloudFront with a www-to-apex redirect, clean URLs, a real 404 page, OWASP security headers, mail DNS records, an optional Search Console record, and two roles for GitHub Actions |
 | Porkbun | points the domain's name servers at the Route 53 zone |
-| GitHub | sets the repository variables the deploy workflow reads, then runs the deploy |
+| GitHub | writes `site-launch.json`, sets the repository variables the deploy workflow reads, then runs the deploy |
 | Purelymail | adds the domain, turns off account reset for it, and creates each mailbox with a first password you type, or one it generates and shows you once; see [Mail](#mail) |
 
 GitHub Actions holds no AWS keys. It signs in through GitHub's OIDC provider and
 assumes a role that AWS trusts only for `main` of your repository. The role can
-only write to the site's bucket and clear the site's CloudFront cache. The
+write to the site's bucket, clear the site's CloudFront cache, and start updates
+to the site's own stack. CloudFormation makes those updates through a second
+role, `CfnRole`. The
 script reads the repository's OIDC subject from GitHub, so it works for
 repositories on GitHub's immutable subject format too.
 
@@ -29,7 +33,8 @@ repositories on GitHub's immutable subject format too.
 |---|---|---|
 | `infra/provision.py` | the provisioning script; Python 3.9+ standard library only | you |
 | `infra/site.yaml` | the CloudFormation template | `provision.py` |
-| `.github/workflows/deploy.yml` | on every push to `main`, uploads `site/` and clears the cache | GitHub Actions |
+| `.github/workflows/deploy.yml` | on every push to `main`, applies `infra/site.yaml` changes, uploads `site/`, and clears the cache | GitHub Actions |
+| `site-launch.json` | the stack's parameters, written by `provision.py`; commit it | `provision.py`, then GitHub Actions |
 | `tests/test_provision.py` | unit tests: `python3 -m unittest discover tests` | you |
 
 ## Requirements
@@ -49,7 +54,7 @@ it.
 1. Ask for the domain, the GitHub repository (`OWNER/REPO`), the folder that
    holds the static files, the AWS profile, and the mailboxes to create.
 2. Copy `infra/` and `.github/workflows/deploy.yml` into the repository root. If
-   the files aren't in `site/`, then change `site/` in `deploy.yml`. If the site
+   the files aren't in `site/`, then change `site/` in `deploy.yml`. The site must have a `404.html`; CloudFront serves it for missing pages. Add `robots.txt` and `sitemap.xml` to the site as well. If the site
    needs a build, then add the build step where the workflow's comment says.
    Commit and push.
 3. If the domain already has records at Porkbun that must keep working, then list
@@ -79,7 +84,11 @@ it.
    `token.actions.githubusercontent.com`. The stack waits on the certificate
    until the new name servers propagate, usually 5 to 30 minutes.
 
-6. Write the project's own command into the project's README. Keep `infra/`
+   Pass `--csp` if the site loads anything from other hosts, such as web fonts; the default policy allows only the site's own files. Pass `--google-site-verification` with the TXT value from Search Console's Domain property setup to verify the domain. Use the same values on every run; a value left out resets.
+
+6. Commit the `site-launch.json` the script wrote, and push. From then on, GitHub Actions applies template changes.
+
+7. Write the project's own command into the project's README. Keep `infra/`
    free of project details, so it stays reusable.
 
 ## Mail

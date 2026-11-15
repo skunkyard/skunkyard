@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Static site on S3 and CloudFront with Route 53 DNS, Purelymail mail records, and a GitHub Actions deploy role. Deploy in us-east-1 (CloudFront requires its certificate there). Run through infra/provision.py.
+Description: Site Launch Kit. Static site on S3 and CloudFront with Route 53 DNS, Purelymail mail records, security headers, and GitHub Actions deploy roles. Deploy in us-east-1 (CloudFront requires its certificate there). Created by infra/provision.py, then updated by GitHub Actions.
 
 Parameters:
   DomainName:
@@ -17,9 +17,20 @@ Parameters:
     Description: The Purelymail account's ownership value (provision.py fetches it). Empty skips the mail records.
     Default: ""
 
+  ContentSecurityPolicy:
+    Type: String
+    Description: The site's Content-Security-Policy header. The default allows only the site's own files.
+    Default: "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
+  GoogleSiteVerification:
+    Type: String
+    Description: The google-site-verification=... value from Search Console's Domain property setup. Empty adds no record.
+    Default: ""
+
 Conditions:
   MakeOidc: !Equals [!Ref CreateOidcProvider, "true"]
   HasMail: !Not [!Equals [!Ref PurelymailOwnership, ""]]
+  HasGsv: !Not [!Equals [!Ref GoogleSiteVerification, ""]]
+  GsvWithoutMail: !And [!Condition HasGsv, !Not [!Condition HasMail]]
 
 Resources:
   HostedZone:
@@ -59,22 +70,51 @@ Resources:
         SigningBehavior: always
         SigningProtocol: sigv4
 
-  # Sends www to the apex domain so search engines see one canonical site.
+  # Redirects www to the apex, keeping the path and query, and maps /about/ and /about to /about/index.html.
   WwwRedirect:
     Type: AWS::CloudFront::Function
     Properties:
-      Name: !Sub "${AWS::StackName}-www-redirect"
+      Name: !Sub "${AWS::StackName}-router"
       AutoPublish: true
-      FunctionConfig: { Comment: Redirect www to apex, Runtime: cloudfront-js-2.0 }
+      FunctionConfig: { Comment: Redirect www to apex and serve index pages, Runtime: cloudfront-js-2.0 }
       FunctionCode: !Sub |
         function handler(event) {
-          var req = event.request;
-          if (req.headers.host && req.headers.host.value.startsWith('www.')) {
-            return { statusCode: 301, statusDescription: 'Moved Permanently',
-                     headers: { location: { value: 'https://${DomainName}' + req.uri } } };
+          var request = event.request;
+          var host = request.headers.host ? request.headers.host.value : '';
+          if (host === 'www.${DomainName}') {
+            var query = Object.keys(request.querystring).map(function (key) {
+              var q = request.querystring[key];
+              var values = q.multiValue ? q.multiValue.map(function (m) { return m.value; }) : [q.value];
+              return values.map(function (v) { return v === '' ? key : key + '=' + v; }).join('&');
+            }).join('&');
+            var location = 'https://${DomainName}' + request.uri + (query ? '?' + query : '');
+            return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: location } } };
           }
-          return req;
+          if (request.uri.endsWith('/')) {
+            request.uri += 'index.html';
+          } else if (!request.uri.split('/').pop().includes('.')) {
+            request.uri += '/index.html';
+          }
+          return request;
         }
+
+  # OWASP-recommended headers, the same set skunkyard.com uses.
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-security"
+        SecurityHeadersConfig:
+          # Subdomains are left out because the mail records point at Purelymail.
+          StrictTransportSecurity: { AccessControlMaxAgeSec: 31536000, IncludeSubdomains: false, Override: true }
+          ContentTypeOptions: { Override: true }
+          FrameOptions: { FrameOption: DENY, Override: true }
+          ReferrerPolicy: { ReferrerPolicy: strict-origin-when-cross-origin, Override: true }
+          XSSProtection: { Protection: false, Override: true }
+          ContentSecurityPolicy: { ContentSecurityPolicy: !Ref ContentSecurityPolicy, Override: true }
+        CustomHeadersConfig:
+          Items:
+            - { Header: Permissions-Policy, Value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()", Override: true }
 
   Distribution:
     Type: AWS::CloudFront::Distribution
@@ -99,12 +139,14 @@ Resources:
           ViewerProtocolPolicy: redirect-to-https
           Compress: true
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt WwwRedirect.FunctionMetadata.FunctionARN
-        # S3 returns 403 for missing keys when the bucket is private.
+        # S3 returns 403 for missing keys when the bucket is private. The site must have /404.html.
         CustomErrorResponses:
-          - { ErrorCode: 403, ResponseCode: 404, ResponsePagePath: /index.html }
+          - { ErrorCode: 403, ResponseCode: 404, ResponsePagePath: /404.html, ErrorCachingMinTTL: 60 }
+          - { ErrorCode: 404, ResponseCode: 404, ResponsePagePath: /404.html, ErrorCachingMinTTL: 60 }
 
   BucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -127,6 +169,29 @@ Resources:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
       ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  # CloudFormation assumes this role when GitHub Actions updates the stack.
+  CfnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - { Effect: Allow, Principal: { Service: cloudformation.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: manage-site-stack
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ["s3:*", "cloudfront:*", "route53:*", "acm:*"]
+                Resource: "*"
+              - Effect: Allow
+                Action: ["iam:GetRole", "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:TagRole", "iam:UntagRole",
+                         "iam:UpdateAssumeRolePolicy", "iam:GetRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PassRole"]
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+              - Effect: Allow
+                Action: ["iam:GetOpenIDConnectProvider", "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+                         "iam:UpdateOpenIDConnectProviderThumbprint", "iam:TagOpenIDConnectProvider"]
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
 
   DeployRole:
     Type: AWS::IAM::Role
@@ -154,6 +219,14 @@ Resources:
               - Effect: Allow
                 Action: cloudfront:CreateInvalidation
                 Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+              - Effect: Allow
+                Action: ["cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:CreateChangeSet",
+                         "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
+                         "cloudformation:GetTemplateSummary"]
+                Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnRole.Arn
 
   # Site records. Z2FDTNDATAQYW2 is the fixed hosted zone ID for every CloudFront alias.
   SiteRecords:
@@ -178,13 +251,27 @@ Resources:
         - Name: !Ref DomainName
           Type: TXT
           TTL: "3600"
-          ResourceRecords: ['"v=spf1 include:_spf.purelymail.com ~all"', !Sub '"${PurelymailOwnership}"']
+          # Route 53 keeps every TXT value for a name in one record, so Search Console's value joins here.
+          ResourceRecords:
+            - '"v=spf1 include:_spf.purelymail.com ~all"'
+            - !Sub '"${PurelymailOwnership}"'
+            - !If [HasGsv, !Sub '"${GoogleSiteVerification}"', !Ref AWS::NoValue]
         - { Name: !Sub "_dmarc.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [dmarcroot.purelymail.com] }
         - { Name: !Sub "purelymail1._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key1.dkimroot.purelymail.com] }
         - { Name: !Sub "purelymail2._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key2.dkimroot.purelymail.com] }
         - { Name: !Sub "purelymail3._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key3.dkimroot.purelymail.com] }
         - { Name: !Sub "autoconfig.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [autoconfig.purelymail.com] }
         - { Name: !Sub "_autodiscover._tcp.${DomainName}", Type: SRV, TTL: "3600", ResourceRecords: ["0 0 443 autodiscover.purelymail.com"] }
+
+  GsvRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: GsvWithoutMail
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: TXT
+      TTL: "3600"
+      ResourceRecords: [!Sub '"${GoogleSiteVerification}"']
 
 Outputs:
   NameServers:
@@ -193,3 +280,4 @@ Outputs:
   BucketName: { Value: !Ref Bucket }
   DistributionId: { Value: !Ref Distribution }
   DeployRoleArn: { Value: !GetAtt DeployRole.Arn }
+  CfnRoleArn: { Value: !GetAtt CfnRole.Arn }
