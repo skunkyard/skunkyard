@@ -51,6 +51,39 @@ class ProvisionTest(unittest.TestCase):
         self.assertTrue(generated)
         self.assertEqual(len(password), 32)
 
+    def test_stack_params_leave_out_what_a_rerun_wasnt_given(self):
+        args = mock.Mock(domain="x.com", create_oidc_provider=False, csp=None, google_site_verification=None)
+        self.assertEqual(provision.stack_params(args, "o/r", None), {"DomainName": "x.com", "GitHubRepo": "o/r"})
+        args = mock.Mock(domain="x.com", create_oidc_provider=True, csp="default-src 'self'",
+                         google_site_verification="google-site-verification=abc")
+        self.assertEqual(provision.stack_params(args, "o/r", "proof=1"),
+                         {"DomainName": "x.com", "GitHubRepo": "o/r", "CreateOidcProvider": "true",
+                          "PurelymailOwnership": "proof=1", "ContentSecurityPolicy": "default-src 'self'",
+                          "GoogleSiteVerification": "google-site-verification=abc"})
+
+    def test_registrar_removes_porkbun_defaults_and_adds_mail_before_moving_name_servers(self):
+        calls = []
+        def fake(path, keys, **body):
+            calls.append((path, body))
+            if path.startswith("/domain/getNs"):
+                return {"ns": ["curitiba.porkbun.com"]}
+            if path.startswith("/dns/retrieve"):
+                return {"records": [{"id": "1", "content": "pixie.porkbun.com"}, {"id": "2", "content": "fwd1.porkbun.com"},
+                                    {"id": "3", "content": "my-own.example.net"}, {"id": "4", "content": "proof=1"}]}
+            return {}
+        with mock.patch.object(provision, "porkbun", side_effect=fake), mock.patch.object(provision, "secret", return_value="k"):
+            provision.provision_registrar("x.com", ["ns-1.awsdns.com"], "proof=1")
+        paths = [p for p, _ in calls]
+        self.assertIn("/dns/delete/x.com/1", paths)
+        self.assertIn("/dns/delete/x.com/2", paths)
+        self.assertNotIn("/dns/delete/x.com/3", paths)
+        self.assertIn("/dns/delete/x.com/4", paths)
+        mx = [b for p, b in calls if p == "/dns/create/x.com" and b["type"] == "MX"]
+        self.assertEqual(mx[0]["prio"], "50")
+        self.assertTrue(all("prio" not in b for p, b in calls if p == "/dns/create/x.com" and b["type"] != "MX"))
+        self.assertEqual(paths.count("/dns/create/x.com"), 7)
+        self.assertEqual(paths[-1], "/domain/updateNs/x.com")
+
 
 if __name__ == "__main__":
     unittest.main()

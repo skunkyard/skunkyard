@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Site Launch Kit. Static site on S3 and CloudFront with Route 53 DNS, Purelymail mail records, security headers, and GitHub Actions deploy roles. Deploy in us-east-1 (CloudFront requires its certificate there). Created by infra/provision.py, then updated by GitHub Actions.
+Description: Site Launch Kit. Static site on S3 and CloudFront with Route 53 DNS, Purelymail mail records, security headers, and a GitHub Actions deploy role. Deploy in us-east-1 (CloudFront requires its certificate there). Created and updated by infra/provision.py.
 
 Parameters:
   DomainName:
@@ -170,29 +170,8 @@ Resources:
       ClientIdList: [sts.amazonaws.com]
       ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
 
-  # CloudFormation assumes this role when GitHub Actions updates the stack.
-  CfnRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - { Effect: Allow, Principal: { Service: cloudformation.amazonaws.com }, Action: sts:AssumeRole }
-      Policies:
-        - PolicyName: manage-site-stack
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action: ["s3:*", "cloudfront:*", "route53:*", "acm:*"]
-                Resource: "*"
-              - Effect: Allow
-                Action: ["iam:GetRole", "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:TagRole", "iam:UntagRole",
-                         "iam:UpdateAssumeRolePolicy", "iam:GetRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PassRole"]
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
-              - Effect: Allow
-                Action: ["iam:GetOpenIDConnectProvider", "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
-                         "iam:UpdateOpenIDConnectProviderThumbprint", "iam:TagOpenIDConnectProvider"]
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
-
+  # GitHub Actions can only upload the site's files and clear its cache. It can't change the stack:
+  # a role that can update a stack can grant itself anything the stack's resources allow.
   DeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -219,14 +198,6 @@ Resources:
               - Effect: Allow
                 Action: cloudfront:CreateInvalidation
                 Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
-              - Effect: Allow
-                Action: ["cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:CreateChangeSet",
-                         "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
-                         "cloudformation:GetTemplateSummary"]
-                Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*"
-              - Effect: Allow
-                Action: iam:PassRole
-                Resource: !GetAtt CfnRole.Arn
 
   # Site records. Z2FDTNDATAQYW2 is the fixed hosted zone ID for every CloudFront alias.
   SiteRecords:
@@ -280,4 +251,3 @@ Outputs:
   BucketName: { Value: !Ref Bucket }
   DistributionId: { Value: !Ref Distribution }
   DeployRoleArn: { Value: !GetAtt DeployRole.Arn }
-  CfnRoleArn: { Value: !GetAtt CfnRole.Arn }

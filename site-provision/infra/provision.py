@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Site Launch Kit: launch a static site with mail, end to end, for any project. Safe to rerun.
 
-Run it once per site, with admin AWS credentials. Afterward GitHub Actions deploys both the files and
-changes to infra/site.yaml, using the parameters this script writes to site-launch.json.
+Run it with admin AWS credentials, once per site and again after any change to infra/site.yaml. GitHub
+Actions only deploys the site's files.
 
 Steps, each skipped when already done:
   1. CloudFormation stack from infra/site.yaml (Route 53 zone, certificate, S3, CloudFront, security headers,
-     mail DNS, and the GitHub Actions roles).
-  2. Porkbun: point the domain's name servers at the Route 53 zone.
-  3. GitHub: write site-launch.json, set the repository variables the deploy workflow reads, then run the deploy.
+     mail DNS, and the GitHub Actions deploy role).
+  2. Porkbun: replace its parking and mail-forwarding defaults with the mail records, then point the
+     domain's name servers at the Route 53 zone.
+  3. GitHub: set the repository variables the deploy workflow reads, then run the deploy.
   4. Purelymail: add the domain, turn off account reset, and create each mailbox.
 
 Usage:
@@ -36,7 +37,6 @@ import urllib.error
 import urllib.request
 
 TEMPLATE = pathlib.Path(__file__).with_name("site.yaml")
-PARAMS_FILE = pathlib.Path(__file__).resolve().parent.parent / "site-launch.json"
 PORKBUN = "https://api.porkbun.com/api/json/v3"
 PURELYMAIL = "https://purelymail.com/api/v0"
 
@@ -146,7 +146,8 @@ def wait_for_stack(aws, name):
     log("Waiting for the stack to finish (the certificate validates once the name servers propagate)")
     for _ in range(180):
         status = aws.stack(name)["StackStatus"]
-        if status.endswith("_COMPLETE") and "ROLLBACK" not in status:
+        # UPDATE_ROLLBACK_COMPLETE is a working stack whose last update was undone.
+        if status in ("CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"):
             return {o["OutputKey"]: o["OutputValue"] for o in aws.stack(name).get("Outputs", [])}
         if "FAILED" in status or "ROLLBACK" in status:
             sys.exit(f"Stack {name} is {status}. Check the stack events.")
@@ -154,21 +155,38 @@ def wait_for_stack(aws, name):
     sys.exit("The stack did not finish within an hour. Rerun this script to keep waiting.")
 
 
-def provision_registrar(domain, nameservers):
+def mail_records(ownership):
+    """Purelymail's records, the same as MailRecords in site.yaml, as (type, name, content, prio)."""
+    return [("MX", "", "mailserver.purelymail.com", "50"), ("TXT", "", "v=spf1 include:_spf.purelymail.com ~all", ""),
+            ("TXT", "", ownership, ""), ("CNAME", "_dmarc", "dmarcroot.purelymail.com", ""),
+            *[("CNAME", f"purelymail{n}._domainkey", f"key{n}.dkimroot.purelymail.com", "") for n in (1, 2, 3)]]
+
+
+def provision_registrar(domain, nameservers, ownership):
     keys = (secret("PORKBUN_API_KEY"), secret("PORKBUN_SECRET_API_KEY"))
     current = porkbun(f"/domain/getNs/{domain}", keys).get("ns", [])
     if normalize_ns(current) == normalize_ns(nameservers):
         log("Porkbun already uses the Route 53 name servers")
         return
+    # Resolvers that cached Porkbun's delegation keep asking Porkbun's DNS for up to two days. Its
+    # defaults (parking, a wildcard that hides the DKIM names, mail forwarding, its SPF) all point at
+    # porkbun.com, so remove those and give those resolvers the real mail records instead. Mail records
+    # from an earlier, interrupted run are removed too, so a rerun doesn't duplicate them.
+    for record in porkbun(f"/dns/retrieve/{domain}", keys).get("records", []):
+        content = record.get("content", "").lower()
+        if "porkbun.com" in content or "purelymail" in content or (ownership and content == ownership.lower()):
+            porkbun(f"/dns/delete/{domain}/{record['id']}", keys)
+    if ownership:
+        for rtype, name, content, prio in mail_records(ownership):
+            body = {"type": rtype, "name": name, "content": content, "ttl": "600", **({"prio": prio} if prio else {})}
+            porkbun(f"/dns/create/{domain}", keys, **body)
     log(f"Setting Porkbun name servers to {', '.join(nameservers)}")
     porkbun(f"/domain/updateNs/{domain}", keys, ns=nameservers)
 
 
-def provision_github(repo, stack, outputs, params):
-    PARAMS_FILE.write_text(json.dumps(params, indent=2) + "\n")
-    log(f"Wrote {PARAMS_FILE.name}; commit it, because GitHub Actions deploys the stack with it")
-    variables = {"AWS_ROLE_ARN": outputs["DeployRoleArn"], "CFN_ROLE_ARN": outputs["CfnRoleArn"], "CFN_STACK": stack,
-                 "S3_BUCKET": outputs["BucketName"], "CLOUDFRONT_DISTRIBUTION_ID": outputs["DistributionId"]}
+def provision_github(repo, outputs):
+    variables = {"AWS_ROLE_ARN": outputs["DeployRoleArn"], "S3_BUCKET": outputs["BucketName"],
+                 "CLOUDFRONT_DISTRIBUTION_ID": outputs["DistributionId"]}
     for var, value in variables.items():
         run("gh", "variable", "set", var, "--repo", repo, "--body", value)
     log("Set GitHub variables; starting the deploy workflow")
@@ -193,8 +211,8 @@ def provision_mail(domain, mailboxes):
     purelymail("updateDomainSettings", token, name=domain, allowAccountReset=False, recheckDns=True)
 
     users = set(purelymail("listUser", token)["users"])
-    # A mailbox's password is typed or shown on screen, never written to a log or a file.
-    if {f"{b}@{domain}" for b in mailboxes} - users and not (sys.stdin.isatty() and sys.stdout.isatty()):
+    # A mailbox's password is typed, or shown on screen once; never written to a log or a file.
+    if {f"{b}@{domain}" for b in mailboxes} - users and not sys.stdin.isatty():
         sys.exit("Creating a mailbox asks for its first password; run this step from a terminal.")
     for box in mailboxes:
         address = f"{box}@{domain}"
@@ -202,6 +220,8 @@ def provision_mail(domain, mailboxes):
             log(f"Mailbox {address} exists")
             continue
         password, generated = first_password(address)
+        if generated and not sys.stdout.isatty():
+            sys.exit("Output goes to a pipe or a log, so a generated password can't be shown. Type one instead.")
         purelymail("createUser", token, userName=box, domainName=domain, password=password,
                    enablePasswordReset=False, sendWelcomeEmail=False)
         log(f"Created {address}")
@@ -210,6 +230,16 @@ def provision_mail(domain, mailboxes):
             log(f"First password, shown once: {password}\n  Sign in at https://inbox.purelymail.com now, change it under "
                 "Settings, and save the new one where you keep passwords. This script keeps no copy.")
         log(f"Read its mail at https://inbox.purelymail.com; manage it from your Purelymail admin account at https://purelymail.com")
+
+
+def stack_params(args, subject, ownership):
+    """Only the values this run was given. On an update, CloudFormation keeps the stack's previous value
+    for every parameter left out, so a rerun without a flag never deletes the records that flag added."""
+    params = {"DomainName": args.domain, "GitHubRepo": subject}
+    optional = {"CreateOidcProvider": "true" if args.create_oidc_provider else None, "PurelymailOwnership": ownership,
+                "ContentSecurityPolicy": args.csp, "GoogleSiteVerification": args.google_site_verification}
+    params.update({k: v for k, v in optional.items() if v is not None})
+    return params
 
 
 def main():
@@ -223,7 +253,7 @@ def main():
     p.add_argument("--create-oidc-provider", action="store_true", help="only for an AWS account without the GitHub OIDC provider")
     p.add_argument("--skip-mail", action="store_true")
     p.add_argument("--csp", help="Content-Security-Policy header (default: the template's, which allows only the site's own files)")
-    p.add_argument("--google-site-verification", default="", help="google-site-verification=... value from Search Console")
+    p.add_argument("--google-site-verification", help="google-site-verification=... value from Search Console")
     args = p.parse_args()
     args.stack = args.stack or default_stack(args.domain)
     if not args.profile:
@@ -231,17 +261,13 @@ def main():
 
     aws = Aws(args.profile, args.region)
     aws("sts", "get-caller-identity")  # fails fast when the sign-in expired
-    params = {"DomainName": args.domain, "GitHubRepo": oidc_subject(args.repo),
-              "CreateOidcProvider": str(args.create_oidc_provider).lower(),
-              "PurelymailOwnership": "" if args.skip_mail else purelymail("getOwnershipCode", secret("PURELYMAIL_API_TOKEN"))["code"],
-              "GoogleSiteVerification": args.google_site_verification}
-    if args.csp:
-        params["ContentSecurityPolicy"] = args.csp
+    ownership = None if args.skip_mail else purelymail("getOwnershipCode", secret("PURELYMAIL_API_TOKEN"))["code"]
+    params = stack_params(args, oidc_subject(args.repo), ownership)
 
     nameservers = provision_stack(aws, args, params)
-    provision_registrar(args.domain, nameservers)
+    provision_registrar(args.domain, nameservers, ownership)
     outputs = wait_for_stack(aws, args.stack)
-    provision_github(args.repo, args.stack, outputs, params)
+    provision_github(args.repo, outputs)
     if not args.skip_mail:
         provision_mail(args.domain, args.mailbox)
     log(f"Done: https://{args.domain}")
