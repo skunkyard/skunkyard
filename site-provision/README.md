@@ -29,6 +29,7 @@ repositories on GitHub's immutable subject format too.
 |---|---|---|
 | `infra/provision.py` | the provisioning script; Python 3.9+ standard library only | you |
 | `infra/site.yaml` | the CloudFormation template | `provision.py` |
+| `infra/mail_profile.py` | writes an iPhone or Mac configuration profile for a mailbox; see [Mail](#mail) | you |
 | `.github/workflows/deploy.yml` | on every push to `main`, uploads `site/` and clears the cache | GitHub Actions |
 | `tests/test_provision.py` | unit tests: `python3 -m unittest discover tests` | you |
 
@@ -98,13 +99,32 @@ The provisioning script gives each new mailbox a generated password and saves it
 
 ### Phone and desktop mail apps
 
-On an iPhone, add the account under **Settings > Apps > Mail > Mail Accounts > Add Account > Other > Add Mail Account**, and choose IMAP. Other mail apps use the same settings.
+Use a configuration profile. It sets every server field at once, so nothing is typed into the iPhone's server screens, where last time's setup failed. The profile holds no password.
+
+1. Check the password from a Mac first. In Terminal, run this; it signs in and sends nothing. A working password prints `(235, b'OK')`:
+
+   ```sh
+   python3 -c "import smtplib,getpass;s=smtplib.SMTP_SSL('smtp.purelymail.com',465);print(s.login('hello@example.com',getpass.getpass()));s.quit()"
+   ```
+
+2. Make the profile: `python3 infra/mail_profile.py hello@example.com --name Example --out ~/Desktop`.
+3. If the phone already has an account for this address, delete it first, under **Settings > Apps > Mail > Mail Accounts**.
+4. AirDrop the `.mobileconfig` file from the Desktop to the phone. On the phone, open **Settings**, tap **Profile Downloaded**, then tap **Install**.
+5. When asked, type the mailbox password by hand. iOS marks the profile **Not Signed**, which is normal for a profile you made.
+6. Send a test message from the phone.
+
+To set up an account by hand, or in another mail app, use these settings:
 
 | | Incoming | Outgoing |
 |---|---|---|
 | Host name | `imap.purelymail.com` | `smtp.purelymail.com` |
 | User name | the full email address | the full email address |
 | Password | the mailbox password | the same password |
-| Port and SSL | 993, SSL on | 465, SSL on (587 if 465 fails) |
+| Port and SSL | 993, SSL on | 465, SSL on |
+| Authentication | Password | Password |
 
-The outgoing user name and password are required. Without them, the app receives mail but can't send it, and Purelymail rejects each message with "The sender address was invalid".
+Three traps break a manual iPhone setup:
+
+- **The outgoing user name and password look optional.** iOS labels them optional, but Purelymail requires them. Without them the phone receives mail but can't send it, and shows "The sender address was invalid".
+- **AutoFill offers the wrong password.** If the phone already has another Purelymail mailbox, iOS suggests that mailbox's saved password for the same servers. Type the password by hand.
+- **The "set up without SSL" prompt.** If iOS asks whether to set up the account without SSL, tap **No**. Purelymail only accepts passwords over SSL.
