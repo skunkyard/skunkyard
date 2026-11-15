@@ -81,6 +81,11 @@ it.
 6. Write the project's own command into the project's README. Keep `infra/`
    free of project details, so it stays reusable.
 
+## Signing in to mail
+
+- **Webmail:** https://inbox.purelymail.com. Sign in with the full email address and the mailbox password from the Keychain: `security find-generic-password -s purelymail-<address> -w`.
+- **Admin:** sign in to your Purelymail account at https://purelymail.com. The domain and its mailboxes are there; reset a password or add users and routing rules from it.
+
 ## Mail on an iPhone
 
 Add the account under **Settings > Apps > Mail > Mail Accounts > Add Account >
