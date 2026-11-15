@@ -10,13 +10,17 @@ Steps, each skipped when already done:
 Usage:
   python3 infra/provision.py --profile <aws-profile> --domain example.com --repo owner/name --mailbox hello
 
-Credentials, read from the macOS Keychain (save each once with
-`security add-generic-password -a "$USER" -s <name> -w`, which prompts for the value):
-  porkbun-api-key, porkbun-secret-api-key   Porkbun > Account > API Access; also turn on API access for the domain.
-  purelymail-api-token                      Purelymail > Account > API.
+Credentials come from these environment variables, or a hidden prompt when one is unset, so any
+secrets manager can supply them (for example `op run --env-file=.env -- python3 infra/provision.py ...`):
+  PORKBUN_API_KEY, PORKBUN_SECRET_API_KEY   Porkbun > Account > API Access; also turn on API access for the domain.
+  PURELYMAIL_API_TOKEN                      Purelymail > Account > API.
+Each new mailbox asks for its first password; press Enter to have one generated and shown once. The script
+stores no password.
 AWS uses --profile (single sign-on; run `aws sso login --profile <profile>` first). GitHub uses the gh CLI login.
 """
 import argparse
+import functools
+import getpass
 import json
 import os
 import pathlib
@@ -43,16 +47,16 @@ def run(*cmd, capture=True):
     return result.stdout.strip() if capture else ""
 
 
-def keychain(name):
-    result = subprocess.run(["security", "find-generic-password", "-s", name, "-w"], capture_output=True, text=True)
-    if result.returncode:
-        sys.exit(f'Keychain item "{name}" is missing. Save it with: security add-generic-password -a "$USER" -s {name} -w')
-    return result.stdout.strip()
+@functools.lru_cache(maxsize=None)
+def secret(name):
+    """The user's secrets manager fills the variable (op run, CI, .env); otherwise ask without echo."""
+    return os.environ.get(name) or getpass.getpass(f"{name}: ") or sys.exit(f"{name} is empty.")
 
 
-def keychain_save(name, value):
-    # shortcut: the value is briefly visible in the process list; fine on a single-user Mac.
-    run("security", "add-generic-password", "-U", "-a", name, "-s", name, "-w", value)
+def first_password(address):
+    """The user's own first password, or a generated one when they press Enter. Returns (password, generated)."""
+    typed = getpass.getpass(f"Password for {address} (Enter to generate one): ")
+    return (typed, False) if typed else (secrets.token_urlsafe(24), True)
 
 
 def post_json(url, body, headers=None):
@@ -146,7 +150,7 @@ def wait_for_stack(aws, name):
 
 
 def provision_registrar(domain, nameservers):
-    keys = (keychain("porkbun-api-key"), keychain("porkbun-secret-api-key"))
+    keys = (secret("PORKBUN_API_KEY"), secret("PORKBUN_SECRET_API_KEY"))
     current = porkbun(f"/domain/getNs/{domain}", keys).get("ns", [])
     if normalize_ns(current) == normalize_ns(nameservers):
         log("Porkbun already uses the Route 53 name servers")
@@ -163,7 +167,7 @@ def provision_github(repo, outputs):
 
 
 def provision_mail(domain, mailboxes):
-    token = keychain("purelymail-api-token")
+    token = secret("PURELYMAIL_API_TOKEN")
     domains = [d["name"] for d in purelymail("listDomains", token)["domains"]]
     if domain not in domains:
         log(f"Adding {domain} to Purelymail (retries while DNS propagates)")
@@ -180,16 +184,22 @@ def provision_mail(domain, mailboxes):
     purelymail("updateDomainSettings", token, name=domain, allowAccountReset=False, recheckDns=True)
 
     users = set(purelymail("listUser", token)["users"])
+    # A mailbox's password is typed or shown on screen, never written to a log or a file.
+    if {f"{b}@{domain}" for b in mailboxes} - users and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        sys.exit("Creating a mailbox asks for its first password; run this step from a terminal.")
     for box in mailboxes:
         address = f"{box}@{domain}"
         if address in users:
             log(f"Mailbox {address} exists")
             continue
-        password = secrets.token_urlsafe(24)
+        password, generated = first_password(address)
         purelymail("createUser", token, userName=box, domainName=domain, password=password,
                    enablePasswordReset=False, sendWelcomeEmail=False)
-        keychain_save(f"purelymail-{address}", password)
-        log(f'Created {address}; its first password is in the Keychain item "purelymail-{address}". Change it at first sign-in.')
+        log(f"Created {address}")
+        if generated:
+            # Purelymail can't force a change at first sign-in, so this message has to.
+            log(f"First password, shown once: {password}\n  Sign in at https://inbox.purelymail.com now, change it under "
+                "Settings, and save the new one where you keep passwords. This script keeps no copy.")
         log(f"Read its mail at https://inbox.purelymail.com; manage it from your Purelymail admin account at https://purelymail.com")
 
 
@@ -212,7 +222,7 @@ def main():
     aws("sts", "get-caller-identity")  # fails fast when the sign-in expired
     params = {"DomainName": args.domain, "GitHubRepo": oidc_subject(args.repo),
               "CreateOidcProvider": str(args.create_oidc_provider).lower(),
-              "PurelymailOwnership": "" if args.skip_mail else purelymail("getOwnershipCode", keychain("purelymail-api-token"))["code"]}
+              "PurelymailOwnership": "" if args.skip_mail else purelymail("getOwnershipCode", secret("PURELYMAIL_API_TOKEN"))["code"]}
 
     nameservers = provision_stack(aws, args, params)
     provision_registrar(args.domain, nameservers)

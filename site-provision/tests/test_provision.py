@@ -33,6 +33,24 @@ class ProvisionTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Ownership record not found"):
                 provision.purelymail("addDomain", "t", domainName="x.com")
 
+    def test_secret_prefers_the_environment_then_prompts(self):
+        provision.secret.cache_clear()
+        with mock.patch.dict("os.environ", {"PURELYMAIL_API_TOKEN": "from-env"}), mock.patch("getpass.getpass") as ask:
+            self.assertEqual(provision.secret("PURELYMAIL_API_TOKEN"), "from-env")
+            ask.assert_not_called()
+        provision.secret.cache_clear()
+        with mock.patch.dict("os.environ", {}, clear=True), mock.patch("getpass.getpass", return_value="typed"):
+            self.assertEqual(provision.secret("PURELYMAIL_API_TOKEN"), "typed")
+        provision.secret.cache_clear()
+
+    def test_first_password_uses_typed_or_generates(self):
+        with mock.patch("getpass.getpass", return_value="mine"):
+            self.assertEqual(provision.first_password("a@x.com"), ("mine", False))
+        with mock.patch("getpass.getpass", return_value=""):
+            password, generated = provision.first_password("a@x.com")
+        self.assertTrue(generated)
+        self.assertEqual(len(password), 32)
+
 
 if __name__ == "__main__":
     unittest.main()

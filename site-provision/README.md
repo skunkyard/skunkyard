@@ -15,7 +15,7 @@ Pulumi-based setup that deploys skunkyard.com, see
 | AWS | creates or updates the CloudFormation stack in `infra/site.yaml`: Route 53 zone, certificate, private S3 bucket, CloudFront with a www-to-apex redirect, mail DNS records, and a deploy role |
 | Porkbun | points the domain's name servers at the Route 53 zone |
 | GitHub | sets the repository variables the deploy workflow reads, then runs the deploy |
-| Purelymail | adds the domain, turns off account reset for it, and creates each mailbox with a generated first password saved in the macOS Keychain; see [Mail](#mail) |
+| Purelymail | adds the domain, turns off account reset for it, and creates each mailbox with a first password you type, or one it generates and shows you once; see [Mail](#mail) |
 
 GitHub Actions holds no AWS keys. It signs in through GitHub's OIDC provider and
 assumes a role that AWS trusts only for `main` of your repository. The role can
@@ -34,8 +34,8 @@ repositories on GitHub's immutable subject format too.
 
 ## Requirements
 
-- A Mac (credentials come from the macOS Keychain), with the AWS CLI and the
-  GitHub CLI (`gh`) signed in.
+- Python 3.9 or later on macOS, Linux, or Windows, with the AWS CLI and the GitHub CLI
+  (`gh`) signed in.
 - AWS credentials that can create IAM roles and CloudFormation stacks.
 - A domain at Porkbun and a Purelymail account. To skip mail, pass `--skip-mail`;
   the stack then leaves out the mail records.
@@ -55,17 +55,18 @@ it.
 3. If the domain already has records at Porkbun that must keep working, then list
    them for the user first. Moving the name servers drops every record at the old
    DNS host.
-4. Have the user save the API credentials once. Each command prompts for the
-   value:
+4. Tell the user which API credentials the script asks for. It reads each from an
+   environment variable, or asks with a hidden prompt when it's unset, and never stores
+   it. The user keeps them wherever they like and supplies them their own way, for
+   example with their secrets manager (`op run --env-file=.env -- python3 ...`) or by
+   typing them at the prompt.
 
-   ```sh
-   security add-generic-password -a "$USER" -s porkbun-api-key -w
-   security add-generic-password -a "$USER" -s porkbun-secret-api-key -w
-   security add-generic-password -a "$USER" -s purelymail-api-token -w
-   ```
+   | Variable | Where it comes from |
+   |---|---|
+   | `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY` | Porkbun **Account > API Access**; API access must also be turned on for the domain |
+   | `PURELYMAIL_API_TOKEN` | Purelymail **Account > API** |
 
-   The Porkbun keys come from **Account > API Access**. API access must also be
-   turned on for the domain. The Purelymail token comes from **Account > API**.
+   Don't put the values in command-line flags or in the repository.
 
 5. Have the user sign in to AWS, then run:
 
@@ -90,11 +91,14 @@ Each mailbox lives on Purelymail.
 
 ### First sign-in
 
-The provisioning script gives each new mailbox a generated password and saves it in the Keychain item `purelymail-<address>`. To read it, run `security find-generic-password -s purelymail-hello@example.com -w`.
+For each new mailbox, the script asks for its first password without showing what you type. Type your own, or press Enter to have one generated. A generated password is printed once, after the mailbox exists, and the script keeps no copy. Run this step from a terminal: the script refuses to create mailboxes when its output goes to a log.
 
-1. Sign in to webmail with that password.
-2. Change the password under **Settings**, and save the new one in your password manager.
-3. Delete the Keychain copy, which no longer works: `security delete-generic-password -s purelymail-hello@example.com`.
+If you used a generated password:
+
+1. Sign in to webmail with it.
+2. Change the password under **Settings**, and save the new one wherever you keep passwords. Purelymail can't force this change, so do it right away.
+
+Lost a password? Reset it from your Purelymail admin account.
 
 ### Mail on an iPhone
 
