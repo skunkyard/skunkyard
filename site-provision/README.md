@@ -115,7 +115,7 @@ Checked on 2026-11-15 against [Apple's guide](https://support.apple.com/en-us/10
    Purelymail: "username and password for the outgoing mail server are NOT optional." iOS labels them optional; fill them in.
 
 6. Tap **Save**.
-7. Check the outgoing sign-in, even if iOS set the account up on its own: open **Settings > Apps > Mail > Mail Accounts**, the account, **Account**, **SMTP**, then `smtp.purelymail.com`. **User Name** must be `hello@example.com`, **Password** filled in, **Use SSL** on, **Server Port** `587`. On the iPhone, port 465 can hang on **Verifying**; 587 worked on 2026-11-15.
+7. Check the outgoing sign-in, even if iOS set the account up on its own: open **Settings > Apps > Mail > Mail Accounts**, the account, **Account**, **SMTP**, then `smtp.purelymail.com`. **User Name** must be `hello@example.com`, **Password** filled in, **Use SSL** on, **Server Port** `465`. Tap **Done** and stay on the screen until **Verifying** finishes, which can take several minutes, longer on cellular. Leaving early can keep the settings from saving, and mail then sits in the Outbox. On 2026-11-15, waiting it out sent the stuck message.
 8. Send a test message to another address and reply to it.
 
-If iOS asks to set up the account without SSL, tap **No**. Purelymail needs encryption on both servers: IMAP port 993, SMTP port 587 (Purelymail also lists 465). If two-factor authentication is on for the mailbox, use a Purelymail app password instead of the mailbox password.
+If iOS asks to set up the account without SSL, tap **No**. Purelymail needs encryption on both servers: IMAP port 993, SMTP port 465 (Purelymail also lists 587 with STARTTLS). If two-factor authentication is on for the mailbox, use a Purelymail app password instead of the mailbox password.
