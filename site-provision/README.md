@@ -98,13 +98,13 @@ The provisioning script gives each new mailbox a generated password and saves it
 
 ### Mail on an iPhone
 
-1. Open **Settings > Apps > Mail > Mail Accounts > Add Account > Other > Add Mail Account**. On older iOS, start at **Settings > Mail > Accounts**.
-2. Fill in the four fields, then tap **Next**:
-   - **Name:** the name people see on your mail
-   - **Email:** `hello@example.com`
-   - **Password:** the mailbox password, typed by hand
-   - **Description:** any label
-3. At the top, choose **IMAP**. Fill in both server sections, then tap **Next**:
+Checked on 2026-11-15 against [Apple's guide](https://support.apple.com/en-us/102619), [Purelymail's phone page](https://purelymail.com/docs/setup/phone), and [Purelymail's server settings](https://purelymail.com/docs/setup/technical).
+
+1. Open **Settings**, tap **Apps**, tap **Mail**, tap **Mail Accounts**, then tap **Add Account**.
+2. Enter `hello@example.com`, then tap **Next**.
+3. Tap **Add Other Account**, then tap **Mail Account**.
+4. Enter your name, `hello@example.com`, the mailbox password, and a description. Type the password by hand; don't accept an AutoFill suggestion. Tap **Next**.
+5. If iOS shows **IMAP** and **POP** choices, tap **IMAP**, then fill in both sections and tap **Next**:
 
    | | Incoming Mail Server | Outgoing Mail Server |
    |---|---|---|
@@ -112,17 +112,10 @@ The provisioning script gives each new mailbox a generated password and saves it
    | User Name | `hello@example.com` | `hello@example.com` |
    | Password | the mailbox password | the same password |
 
-   iOS marks the outgoing **User Name** and **Password** as optional. Fill them in anyway. Purelymail requires them, and without them the phone receives mail but can't send it ("The sender address was invalid").
+   Purelymail: "username and password for the outgoing mail server are NOT optional." iOS labels them optional; fill them in.
 
-4. Wait for **Verifying** to finish, which can take 30 seconds, then tap **Save**.
-5. Send a test message to another address and reply to it.
+6. Tap **Save**.
+7. Check the outgoing sign-in, even if iOS set the account up on its own: open **Settings > Apps > Mail > Mail Accounts**, the account, **Account**, **SMTP**, then `smtp.purelymail.com`. **User Name** must be `hello@example.com`, **Password** filled in, **Use SSL** on, **Server Port** `465`.
+8. Send a test message to another address and reply to it.
 
-Three things to watch for:
-
-- **AutoFill:** if the phone already has another Purelymail mailbox, iOS suggests that mailbox's password. Don't accept it. Type the password.
-- **SSL prompt:** if iOS asks to set up the account without SSL, tap **No**. Then check the settings below.
-- **If sending still fails,** open **Settings > Apps > Mail > Mail Accounts**, the account, then **Account**:
-  - **Advanced:** **Use SSL** on, **Authentication** Password, **Server Port** `993`.
-  - **SMTP > `smtp.purelymail.com`:** **Server** on, **User Name** and **Password** filled in, **Use SSL** on, **Authentication** Password, **Server Port** `465`.
-
-Other mail apps use the same servers: IMAP on port 993 and SMTP on port 465, both with SSL, the full email address as the user name, and the mailbox password for both.
+If iOS asks to set up the account without SSL, tap **No**. Purelymail needs SSL on both servers: IMAP port 993, SMTP port 465. If two-factor authentication is on for the mailbox, use a Purelymail app password instead of the mailbox password.
