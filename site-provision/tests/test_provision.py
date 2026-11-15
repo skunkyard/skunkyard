@@ -84,6 +84,14 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(paths.count("/dns/create/x.com"), 7)
         self.assertEqual(paths[-1], "/domain/updateNs/x.com")
 
+    def test_wait_for_stack_accepts_a_rolled_back_update_and_stops_on_failure(self):
+        aws = mock.Mock()
+        aws.stack.return_value = {"StackStatus": "UPDATE_ROLLBACK_COMPLETE", "Outputs": [{"OutputKey": "A", "OutputValue": "1"}]}
+        self.assertEqual(provision.wait_for_stack(aws, "s"), {"A": "1"})
+        aws.stack.return_value = {"StackStatus": "UPDATE_ROLLBACK_FAILED"}
+        with self.assertRaises(SystemExit):
+            provision.wait_for_stack(aws, "s")
+
 
 if __name__ == "__main__":
     unittest.main()

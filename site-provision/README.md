@@ -41,8 +41,8 @@ repositories on GitHub's immutable subject format too.
 - Python 3.9 or later on macOS, Linux, or Windows, with the AWS CLI and the GitHub CLI
   (`gh`) signed in.
 - AWS credentials that can create IAM roles and CloudFormation stacks.
-- A domain at Porkbun and a Purelymail account. To skip mail, pass `--skip-mail`;
-  the stack then leaves out the mail records.
+- A domain at Porkbun and a Purelymail account. To skip mail on a new site, pass
+  `--skip-mail`. On an existing stack it changes nothing; the mail records stay.
 
 ## Instructions for an LLM
 
@@ -58,7 +58,10 @@ it.
    Commit and push.
 3. If the domain already has records at Porkbun that must keep working, then list
    them for the user first. Moving the name servers drops every record at the old
-   DNS host.
+   DNS host. Before the move, the script deletes Porkbun's parking and mail-forwarding
+   defaults and adds the mail records there, for resolvers that still use the old
+   delegation. Delete any SPF or `_dmarc` record at Porkbun that isn't Purelymail's
+   first; Porkbun refuses a second one, and the script stops.
 4. Tell the user which API credentials the script asks for. It reads each from an
    environment variable, or asks with a hidden prompt when it's unset, and never stores
    it. The user keeps them wherever they like and supplies them their own way, for

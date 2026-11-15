@@ -19,9 +19,10 @@ jobs:
     if: vars.AWS_ROLE_ARN != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to commits, so a moved tag can't run new code with access to the bucket.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Add your build step here if the site needs one, for example: - run: npm run build
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
