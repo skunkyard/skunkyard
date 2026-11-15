@@ -55,11 +55,12 @@ class ProvisionTest(unittest.TestCase):
         args = mock.Mock(domain="x.com", create_oidc_provider=False, csp=None, google_site_verification=None)
         self.assertEqual(provision.stack_params(args, "o/r", None), {"DomainName": "x.com", "GitHubRepo": "o/r"})
         args = mock.Mock(domain="x.com", create_oidc_provider=True, csp="default-src 'self'",
-                         google_site_verification="google-site-verification=abc")
+                         google_site_verification=["google-site-verification=abc", "google-site-verification=def"])
         self.assertEqual(provision.stack_params(args, "o/r", "proof=1"),
                          {"DomainName": "x.com", "GitHubRepo": "o/r", "CreateOidcProvider": "true",
                           "PurelymailOwnership": "proof=1", "ContentSecurityPolicy": "default-src 'self'",
-                          "GoogleSiteVerification": "google-site-verification=abc"})
+                          "GoogleSiteVerification": "google-site-verification=abc",
+                          "GoogleSiteVerification2": "google-site-verification=def"})
 
     def test_registrar_removes_porkbun_defaults_and_adds_mail_before_moving_name_servers(self):
         calls = []

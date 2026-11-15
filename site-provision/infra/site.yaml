@@ -25,12 +25,17 @@ Parameters:
     Type: String
     Description: The google-site-verification=... value from Search Console's Domain property setup. Empty adds no record.
     Default: ""
+  GoogleSiteVerification2:
+    Type: String
+    Description: A second owner's google-site-verification=... value. Each Search Console owner verifies with their own value.
+    Default: ""
 
 Conditions:
   MakeOidc: !Equals [!Ref CreateOidcProvider, "true"]
   HasMail: !Not [!Equals [!Ref PurelymailOwnership, ""]]
   HasGsv: !Not [!Equals [!Ref GoogleSiteVerification, ""]]
-  GsvWithoutMail: !And [!Condition HasGsv, !Not [!Condition HasMail]]
+  HasGsv2: !Not [!Equals [!Ref GoogleSiteVerification2, ""]]
+  GsvWithoutMail: !And [!Or [!Condition HasGsv, !Condition HasGsv2], !Not [!Condition HasMail]]
 
 Resources:
   HostedZone:
@@ -227,6 +232,7 @@ Resources:
             - '"v=spf1 include:_spf.purelymail.com ~all"'
             - !Sub '"${PurelymailOwnership}"'
             - !If [HasGsv, !Sub '"${GoogleSiteVerification}"', !Ref AWS::NoValue]
+            - !If [HasGsv2, !Sub '"${GoogleSiteVerification2}"', !Ref AWS::NoValue]
         - { Name: !Sub "_dmarc.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [dmarcroot.purelymail.com] }
         - { Name: !Sub "purelymail1._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key1.dkimroot.purelymail.com] }
         - { Name: !Sub "purelymail2._domainkey.${DomainName}", Type: CNAME, TTL: "3600", ResourceRecords: [key2.dkimroot.purelymail.com] }
@@ -242,7 +248,9 @@ Resources:
       Name: !Ref DomainName
       Type: TXT
       TTL: "3600"
-      ResourceRecords: [!Sub '"${GoogleSiteVerification}"']
+      ResourceRecords:
+        - !If [HasGsv, !Sub '"${GoogleSiteVerification}"', !Ref AWS::NoValue]
+        - !If [HasGsv2, !Sub '"${GoogleSiteVerification2}"', !Ref AWS::NoValue]
 
 Outputs:
   NameServers:

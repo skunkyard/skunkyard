@@ -86,7 +86,7 @@ it.
    `token.actions.githubusercontent.com`. The stack waits on the certificate
    until the new name servers propagate, usually 5 to 30 minutes.
 
-   Pass `--csp` if the site loads anything from other hosts, such as web fonts; the default policy allows only the site's own files. Pass `--google-site-verification` with the TXT value from Search Console's Domain property setup to verify the domain. On a rerun, leave out any flag you don't want to change: the stack keeps its previous value.
+   Pass `--csp` if the site loads anything from other hosts, such as web fonts; the default policy allows only the site's own files. Pass `--google-site-verification` with the TXT value from Search Console to verify the domain; repeat it for a second owner, since each owner verifies with their own value (two at most). An owner added from **Users and permissions** is only delegated: signed in as that owner, open **Settings > Ownership verification** to get their own value. On a rerun, leave out any flag you don't want to change: the stack keeps its previous value.
 
 6. Write the project's own command into the project's README. Keep `infra/`
    free of project details, so it stays reusable.

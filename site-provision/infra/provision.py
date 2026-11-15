@@ -237,7 +237,10 @@ def stack_params(args, subject, ownership):
     for every parameter left out, so a rerun without a flag never deletes the records that flag added."""
     params = {"DomainName": args.domain, "GitHubRepo": subject}
     optional = {"CreateOidcProvider": "true" if args.create_oidc_provider else None, "PurelymailOwnership": ownership,
-                "ContentSecurityPolicy": args.csp, "GoogleSiteVerification": args.google_site_verification}
+                "ContentSecurityPolicy": args.csp}
+    # One google-site-verification value per Search Console owner, up to two.
+    for key, value in zip(("GoogleSiteVerification", "GoogleSiteVerification2"), args.google_site_verification or []):
+        optional[key] = value
     params.update({k: v for k, v in optional.items() if v is not None})
     return params
 
@@ -253,8 +256,11 @@ def main():
     p.add_argument("--create-oidc-provider", action="store_true", help="only for an AWS account without the GitHub OIDC provider")
     p.add_argument("--skip-mail", action="store_true")
     p.add_argument("--csp", help="Content-Security-Policy header (default: the template's, which allows only the site's own files)")
-    p.add_argument("--google-site-verification", help="google-site-verification=... value from Search Console")
+    p.add_argument("--google-site-verification", action="append",
+                   help="google-site-verification=... value from Search Console; repeat for a second owner (two at most)")
     args = p.parse_args()
+    if len(args.google_site_verification or []) > 2:
+        p.error("--google-site-verification takes two values at most")
     args.stack = args.stack or default_stack(args.domain)
     if not args.profile:
         p.error("set --profile or AWS_PROFILE")
