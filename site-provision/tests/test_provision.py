@@ -61,6 +61,9 @@ class ProvisionTest(unittest.TestCase):
                           "PurelymailOwnership": "proof=1", "ContentSecurityPolicy": "default-src 'self'",
                           "GoogleSiteVerification": "google-site-verification=abc",
                           "GoogleSiteVerification2": "google-site-verification=def"})
+        args.google_site_verification = ["", ""]
+        self.assertEqual({k: v for k, v in provision.stack_params(args, "o/r", None).items() if k.startswith("Google")},
+                         {"GoogleSiteVerification": "", "GoogleSiteVerification2": ""})
 
     def test_registrar_removes_porkbun_defaults_and_adds_mail_before_moving_name_servers(self):
         calls = []
