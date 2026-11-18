@@ -16,7 +16,7 @@ Usage:
   python3 infra/provision.py --profile <aws-profile> --domain example.com --repo owner/name --mailbox hello
 
 Credentials come from these environment variables, or a hidden prompt when one is unset, so any
-secrets manager can supply them (for example `op run --env-file=.env -- python3 infra/provision.py ...`):
+secrets manager that sets environment variables can supply them:
   PORKBUN_API_KEY, PORKBUN_SECRET_API_KEY   Porkbun > Account > API Access; also turn on API access for the domain.
   PURELYMAIL_API_TOKEN                      Purelymail > Account > API.
 Each new mailbox asks for its first password; press Enter to have one generated and shown once. The script
@@ -54,7 +54,7 @@ def run(*cmd, capture=True):
 
 @functools.lru_cache(maxsize=None)
 def secret(name):
-    """The user's secrets manager fills the variable (op run, CI, .env); otherwise ask without echo."""
+    """The user's secrets manager fills the variable (a secrets manager, CI, .env); otherwise ask without echo."""
     return os.environ.get(name) or getpass.getpass(f"{name}: ") or sys.exit(f"{name} is empty.")
 
 
@@ -171,8 +171,11 @@ def provision_registrar(domain, nameservers, ownership):
     # Resolvers that cached Porkbun's delegation keep asking Porkbun's DNS for up to two days. Its
     # defaults (parking, a wildcard that hides the DKIM names, mail forwarding, its SPF) all point at
     # porkbun.com, so remove those and give those resolvers the real mail records instead. Mail records
-    # from an earlier, interrupted run are removed too, so a rerun doesn't duplicate them.
+    # from an earlier, interrupted run are removed too, so a rerun doesn't duplicate them. NS records
+    # stay: they name Porkbun's own servers, and updateNs replaces them.
     for record in porkbun(f"/dns/retrieve/{domain}", keys).get("records", []):
+        if record.get("type") == "NS":
+            continue
         content = record.get("content", "").lower()
         if "porkbun.com" in content or "purelymail" in content or (ownership and content == ownership.lower()):
             porkbun(f"/dns/delete/{domain}/{record['id']}", keys)

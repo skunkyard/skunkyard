@@ -70,7 +70,8 @@ class ProvisionTest(unittest.TestCase):
                 return {"ns": ["curitiba.porkbun.com"]}
             if path.startswith("/dns/retrieve"):
                 return {"records": [{"id": "1", "content": "pixie.porkbun.com"}, {"id": "2", "content": "fwd1.porkbun.com"},
-                                    {"id": "3", "content": "my-own.example.net"}, {"id": "4", "content": "proof=1"}]}
+                                    {"id": "3", "content": "my-own.example.net"}, {"id": "4", "content": "proof=1"},
+                                    {"id": "5", "type": "NS", "content": "curitiba.ns.porkbun.com"}]}
             return {}
         with mock.patch.object(provision, "porkbun", side_effect=fake), mock.patch.object(provision, "secret", return_value="k"):
             provision.provision_registrar("x.com", ["ns-1.awsdns.com"], "proof=1")
@@ -79,6 +80,7 @@ class ProvisionTest(unittest.TestCase):
         self.assertIn("/dns/delete/x.com/2", paths)
         self.assertNotIn("/dns/delete/x.com/3", paths)
         self.assertIn("/dns/delete/x.com/4", paths)
+        self.assertNotIn("/dns/delete/x.com/5", paths)
         mx = [b for p, b in calls if p == "/dns/create/x.com" and b["type"] == "MX"]
         self.assertEqual(mx[0]["prio"], "50")
         self.assertTrue(all("prio" not in b for p, b in calls if p == "/dns/create/x.com" and b["type"] != "MX"))

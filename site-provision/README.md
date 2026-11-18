@@ -14,7 +14,7 @@ Pulumi-based setup that deploys skunkyard.com, see
 
 | service | what the script does |
 |---|---|
-| AWS | creates or updates the CloudFormation stack in `infra/site.yaml`: Route 53 zone, certificate, private S3 bucket, CloudFront with a www-to-apex redirect, clean URLs, a real 404 page, OWASP security headers, mail DNS records, an optional Search Console record, and a deploy role for GitHub Actions |
+| AWS | creates or updates the CloudFormation stack in `infra/site.yaml`: Route 53 zone, certificate, private S3 bucket, CloudFront with a www-to-apex redirect, clean URLs, a real 404 page, security headers, mail DNS records, an optional Search Console record, and a deploy role for GitHub Actions |
 | Porkbun | removes its parking and mail-forwarding defaults, adds the mail records, then points the domain's name servers at the Route 53 zone |
 | GitHub | sets the repository variables the deploy workflow reads, then runs the deploy |
 | Purelymail | adds the domain, turns off account reset for it, and creates each mailbox with a first password you type, or one it generates and shows you once; see [Mail](#mail) |
@@ -53,7 +53,7 @@ it.
 1. Ask for the domain, the GitHub repository (`OWNER/REPO`), the folder that
    holds the static files, the AWS profile, and the mailboxes to create.
 2. Copy `infra/` and `.github/workflows/deploy.yml` into the repository root. If
-   the files aren't in `site/`, then change `site/` in `deploy.yml`. The site must have a `404.html`; CloudFront serves it for missing pages. Add `robots.txt` and `sitemap.xml` to the site as well. If the site
+   the files aren't in `site/`, then change `site/` in `deploy.yml`. The site must have a `404.html`; CloudFront serves it for missing pages. Clean URLs serve `/about` from `/about/index.html` without a redirect, so link to folders with a trailing slash (`/about/`) or use root-relative links; a file with no extension, such as `LICENSE`, returns 404. Add `robots.txt` and `sitemap.xml` to the site as well. If the site
    needs a build, then add the build step where the workflow's comment says.
    Commit and push.
 3. If the domain already has records at Porkbun that must keep working, then list
@@ -65,8 +65,8 @@ it.
 4. Tell the user which API credentials the script asks for. It reads each from an
    environment variable, or asks with a hidden prompt when it's unset, and never stores
    it. The user keeps them wherever they like and supplies them their own way, for
-   example with their secrets manager (`op run --env-file=.env -- python3 ...`) or by
-   typing them at the prompt.
+   example from a secrets manager that sets environment variables, or by typing them
+   at the prompt.
 
    | Variable | Where it comes from |
    |---|---|
@@ -86,7 +86,7 @@ it.
    `token.actions.githubusercontent.com`. The stack waits on the certificate
    until the new name servers propagate, usually 5 to 30 minutes.
 
-   Pass `--csp` if the site loads anything from other hosts, such as web fonts; the default policy allows only the site's own files. Pass `--google-site-verification` with the TXT value from Search Console to verify the domain; repeat it for a second owner, since each owner verifies with their own value (two at most). An owner added from **Users and permissions** is only delegated: signed in as that owner, open **Settings > Ownership verification** to get their own value. On a rerun, leave out any flag you don't want to change: the stack keeps its previous value.
+   Pass `--csp` if the site loads anything from other hosts, such as web fonts; the default policy allows only the site's own files. Pass `--google-site-verification` with the TXT value from Search Console to verify the domain; repeat it for a second owner, since each owner verifies with their own value (two at most). An owner added from **Users and permissions** is only delegated: signed in as that owner, open **Settings > Ownership verification** to get their own value. On a rerun, leave out any flag you don't want to change: the stack keeps its previous value. To turn mail on after a run with `--skip-mail` and a Search Console value, first rerun with `--google-site-verification ""` once per value to clear them, then run with mail and the values; otherwise the stack update fails, because the domain can hold only one TXT record set.
 
 6. Write the project's own command into the project's README. Keep `infra/`
    free of project details, so it stays reusable.

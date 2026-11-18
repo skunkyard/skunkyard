@@ -103,7 +103,7 @@ Resources:
           return request;
         }
 
-  # OWASP-recommended headers, the same set skunkyard.com uses.
+  # Standard security headers, the same set skunkyard.com uses.
   SecurityHeaders:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
